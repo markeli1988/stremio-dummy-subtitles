@@ -13,7 +13,9 @@ const manifest = {
 const builder = new addonBuilder(manifest);
 
 builder.defineSubtitlesHandler(async (args) => {
-  console.log("Subtitle request:", args.type, args.id);
+	console.log("=== SUBTITLE REQUEST ===");
+	console.log(JSON.stringify(args, null, 2));
+	console.log("========================");
 
   return {
     subtitles: [
