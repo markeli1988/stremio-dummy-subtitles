@@ -1,0 +1,33 @@
+const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
+
+const manifest = {
+  id: "com.matej.dummy-subtitles",
+  version: "1.0.0",
+  name: "Dummy Slovenian Subtitles",
+  description: "Always provides a dummy Slovenian subtitle track",
+  resources: ["subtitles"],
+  types: ["movie", "series"],
+  catalogs: []
+};
+
+const builder = new addonBuilder(manifest);
+
+builder.defineSubtitlesHandler(async (args) => {
+  console.log("Subtitle request:", args.type, args.id);
+
+  return {
+    subtitles: [
+      {
+        id: "dummy-sl",
+        lang: "slv",
+        url: "https://raw.githubusercontent.com/Stremio/stremio-addon-sdk/master/test/subtitles.vtt"
+      }
+    ]
+  };
+});
+
+const PORT = process.env.PORT || 7000;
+
+serveHTTP(builder.getInterface(), {
+  port: PORT
+});
