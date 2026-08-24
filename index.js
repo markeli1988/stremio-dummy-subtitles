@@ -20,7 +20,7 @@ builder.defineSubtitlesHandler(async (args) => {
       {
         id: "dummy-sl",
         lang: "slv",
-        url: "https://raw.githubusercontent.com/Stremio/stremio-addon-sdk/master/test/subtitles.vtt"
+        url: "https://raw.githubusercontent.com/markelj1988/stremio-dummy-subtitles/main/empty.srt"
       }
     ]
   };
