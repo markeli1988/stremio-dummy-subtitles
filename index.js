@@ -17,8 +17,10 @@ builder.defineSubtitlesHandler(async (args) => {
   console.log(JSON.stringify(args, null, 2));
   console.log("========================");
 
-  if (!args.extra || !args.extra.videoHash) {
-    console.log("NO HASH - returning nothing");
+  const subtitleUrl = process.env.TEST_SUBTITLE_URL;
+
+  if (!subtitleUrl) {
+    console.log("TEST_SUBTITLE_URL is missing");
 
     return {
       subtitles: [],
@@ -26,14 +28,14 @@ builder.defineSubtitlesHandler(async (args) => {
     };
   }
 
-  console.log("HASH EXISTS - returning subtitle");
+  console.log("Returning Subtito subtitle through bridge");
 
   return {
     subtitles: [
       {
-        id: "dummy-hash-test",
+        id: "subtito-android-test",
         lang: "slv",
-        url: "https://raw.githubusercontent.com/markelj1988/stremio-dummy-subtitles/main/empty.srt"
+        url: subtitleUrl
       }
     ],
     cacheMaxAge: 0
