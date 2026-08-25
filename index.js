@@ -3,9 +3,9 @@ const express = require("express");
 
 const manifest = {
   id: "com.matej.dummy-subtitles",
-  version: "1.0.2",
-  name: "Dummy Slovenian Subtitles",
-  description: "Subtito Android TV bridge",
+  version: "1.1.0",
+  name: "Subtito Slovenian Bridge",
+  description: "Android TV compatibility bridge for Subtito Slovenian subtitles",
   resources: ["subtitles"],
   types: ["movie", "series"],
   catalogs: []
@@ -17,78 +17,337 @@ const PUBLIC_URL =
   process.env.PUBLIC_URL ||
   "http://127.0.0.1:7000";
 
+const SUBTITO_BASE_URL = process.env.SUBTITO_BASE_URL;
+
+
+// ---------------------------------------------------------
+// Build Subtito addon request
+// ---------------------------------------------------------
+
+function buildSubtitoRequest(args) {
+
+  const type = encodeURIComponent(args.type);
+  const id = encodeURIComponent(args.id);
+
+  const extra = args.extra || {};
+
+  const extraParts = [];
+
+  /*
+   * TV praviloma pošlje filename + videoSize.
+   * Točno tak request sva videla tudi pri delujočem
+   * Subtito requestu na PC-ju.
+   */
+  if (extra.filename) {
+    extraParts.push(
+      `filename=${encodeURIComponent(extra.filename)}`
+    );
+  }
+
+  if (extra.videoSize) {
+    extraParts.push(
+      `videoSize=${encodeURIComponent(extra.videoSize)}`
+    );
+  }
+
+  /*
+   * Če filename ni na voljo, uporabimo videoHash kot fallback.
+   */
+  if (!extra.filename && extra.videoHash) {
+    extraParts.push(
+      `videoHash=${encodeURIComponent(extra.videoHash)}`
+    );
+  }
+
+  let url =
+    `${SUBTITO_BASE_URL}/subtitles/${type}/${id}`;
+
+  if (extraParts.length > 0) {
+    url += `/${extraParts.join("&")}`;
+  }
+
+  url += ".json";
+
+  return url;
+}
+
+
+// ---------------------------------------------------------
+// Stremio subtitle handler
+// ---------------------------------------------------------
 
 builder.defineSubtitlesHandler(async (args) => {
 
-  console.log("=== SUBTITLE REQUEST ===");
+  console.log("");
+  console.log("=== STREMIO SUBTITLE REQUEST ===");
   console.log(JSON.stringify(args, null, 2));
-  console.log("========================");
 
-  const timestamp = Date.now();
+  if (!SUBTITO_BASE_URL) {
 
-  return {
-    subtitles: [
+    console.log("SUBTITO_BASE_URL missing");
+
+    return {
+      subtitles: [],
+      cacheMaxAge: 0
+    };
+  }
+
+  try {
+
+    const subtitoRequestUrl =
+      buildSubtitoRequest(args);
+
+    console.log(
+      "Requesting subtitles from Subtito"
+    );
+
+    /*
+     * Namenoma ne izpisujemo celega URL-ja,
+     * ker vsebuje uporabniški Subtito ključ.
+     */
+
+    const response = await fetch(
+      subtitoRequestUrl,
       {
-        id: `subtito-bridge-${timestamp}`,
-        lang: "slv",
-        url: `${PUBLIC_URL}/bridge.srt?v=${timestamp}`
+        headers: {
+          "Accept": "application/json",
+          "User-Agent": "Stremio-Subtito-Android-Bridge/1.1"
+        }
       }
-    ],
-    cacheMaxAge: 0
-  };
+    );
+
+    console.log(
+      "Subtito response status:",
+      response.status
+    );
+
+    if (!response.ok) {
+
+      console.log(
+        "Subtito request failed:",
+        response.status
+      );
+
+      return {
+        subtitles: [],
+        cacheMaxAge: 0
+      };
+    }
+
+    const data = await response.json();
+
+    console.log(
+      "Subtitles returned:",
+      data.subtitles?.length || 0
+    );
+
+    if (
+      !data.subtitles ||
+      data.subtitles.length === 0
+    ) {
+
+      return {
+        subtitles: [],
+        cacheMaxAge: 0
+      };
+    }
+
+
+    /*
+     * Pretvorimo Subtito rezultate.
+     *
+     * Ključna sprememba:
+     *
+     * Subtito:
+     * lang = "🟢 slovenski jezik"
+     *
+     * Android bridge:
+     * lang = "slv"
+     */
+
+    const subtitles =
+      data.subtitles.map((subtitle, index) => {
+
+        /*
+         * Originalni Subtito SRT URL zakodiramo.
+         * Bridge ga bo nato dekodiral in naredil
+         * 302 redirect.
+         */
+
+        const encodedUrl =
+          Buffer
+            .from(subtitle.url, "utf8")
+            .toString("base64url");
+
+        const timestamp = Date.now();
+
+        return {
+          id:
+            `subtito-sl-${index}-${timestamp}`,
+
+          lang: "slv",
+
+          url:
+            `${PUBLIC_URL}/bridge.srt` +
+            `?u=${encodedUrl}` +
+            `&v=${timestamp}`
+        };
+      });
+
+
+    console.log(
+      "Returning subtitles to Android TV:",
+      subtitles.length
+    );
+
+    return {
+      subtitles,
+      cacheMaxAge: 0
+    };
+
+  } catch (error) {
+
+    console.error(
+      "Subtitle handler error:",
+      error
+    );
+
+    return {
+      subtitles: [],
+      cacheMaxAge: 0
+    };
+  }
+
 });
 
+
+// ---------------------------------------------------------
+// Express
+// ---------------------------------------------------------
 
 const app = express();
 
 
-/*
- * Subtitle bridge
- *
- * Ne prenašamo SRT preko Renderja.
- * Android TV samo preusmerimo direktno na Subtito URL.
- */
+// ---------------------------------------------------------
+// Subtitle redirect bridge
+// ---------------------------------------------------------
+
 app.get("/bridge.srt", (req, res) => {
 
-  const subtitoUrl = process.env.TEST_SUBTITLE_URL;
+  try {
 
-  if (!subtitoUrl) {
+    const encodedUrl = req.query.u;
 
-    console.log("TEST_SUBTITLE_URL missing");
+    if (!encodedUrl) {
+      return res
+        .status(400)
+        .send("Missing subtitle URL");
+    }
 
-    return res
+    const subtitoUrl =
+      Buffer
+        .from(encodedUrl, "base64url")
+        .toString("utf8");
+
+
+    /*
+     * Security:
+     *
+     * Ker je addon javno dostopen, preverimo,
+     * da /bridge.srt ne postane poljuben
+     * internet redirect endpoint.
+     */
+
+    const parsedUrl =
+      new URL(subtitoUrl);
+
+    if (
+      parsedUrl.protocol !== "https:" ||
+      (
+        parsedUrl.hostname !== "subtito.com" &&
+        !parsedUrl.hostname.endsWith(".subtito.com")
+      )
+    ) {
+
+      console.log(
+        "Blocked invalid redirect target"
+      );
+
+      return res
+        .status(403)
+        .send("Invalid subtitle target");
+    }
+
+
+    console.log(
+      "Redirecting client to Subtito SRT"
+    );
+
+
+    res.set({
+      "Cache-Control":
+        "no-store, no-cache, must-revalidate",
+
+      "Pragma": "no-cache",
+
+      "Expires": "0"
+    });
+
+
+    res.redirect(
+      302,
+      subtitoUrl
+    );
+
+  } catch (error) {
+
+    console.error(
+      "Bridge redirect error:",
+      error
+    );
+
+    res
       .status(500)
-      .send("TEST_SUBTITLE_URL missing");
+      .send("Subtitle bridge error");
   }
 
-  console.log("=== BRIDGE REQUEST ===");
-  console.log("Redirecting client to Subtito");
-  console.log("======================");
-
-  res.set({
-    "Cache-Control": "no-store, no-cache, must-revalidate",
-    "Pragma": "no-cache",
-    "Expires": "0"
-  });
-
-  res.redirect(302, subtitoUrl);
 });
 
 
-/*
- * Stremio addon routes:
- *
- * /manifest.json
- * /subtitles/...
- */
-app.use(getRouter(builder.getInterface()));
+// ---------------------------------------------------------
+// Stremio addon routes
+// ---------------------------------------------------------
+
+app.use(
+  getRouter(
+    builder.getInterface()
+  )
+);
 
 
-const PORT = process.env.PORT || 7000;
+// ---------------------------------------------------------
+// Start server
+// ---------------------------------------------------------
 
-app.listen(PORT, () => {
+const PORT =
+  process.env.PORT || 7000;
 
-  console.log(`Addon running on port ${PORT}`);
-  console.log(`Public URL: ${PUBLIC_URL}`);
 
-});
+app.listen(
+  PORT,
+  () => {
+
+    console.log(
+      `Addon running on port ${PORT}`
+    );
+
+    console.log(
+      `Public URL: ${PUBLIC_URL}`
+    );
+
+    console.log(
+      `Subtito configured: ${Boolean(SUBTITO_BASE_URL)}`
+    );
+
+  }
+);
